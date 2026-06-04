@@ -1,0 +1,7 @@
+{
+    "name": "MeteoSwiss rain radar",
+    "country": ["CH"],
+    "homeassistant": "2024.1.0",
+    "version": "0.1.0",
+    "zip_release": false
+}

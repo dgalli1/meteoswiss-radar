@@ -1,0 +1,30 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "MeteoSwiss rain radar",
+                "description": "Polls the public MeteoSwiss radar + INCA forecast and exposes a sensor per location.",
+                "data": {
+                    "name": "Name",
+                    "lat": "Latitude",
+                    "lon": "Longitude"
+                }
+            }
+        },
+        "abort": {
+            "already_configured": "This location is already configured."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "MeteoSwiss options",
+                "data": {
+                    "scan_interval_minutes": "Refresh interval (minutes)",
+                    "history_hours": "History window (hours)",
+                    "forecast_hours": "Forecast window (hours)"
+                }
+            }
+        }
+    }
+}

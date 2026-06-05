@@ -49,6 +49,7 @@ _DESCRIPTIONS = {
     "next_rain":        SensorEntityDescription(
         key="next_rain", name="Next rain in",
         native_unit_of_measurement="min",
+        state_class=SensorStateClass.MEASUREMENT,
     ),
     "forecast_max_6h":  SensorEntityDescription(
         key="forecast_max_6h", name="Forecast max 6h",
@@ -134,12 +135,11 @@ class MeteoSwissSensor(CoordinatorEntity[MeteoSwissCoordinator], SensorEntity):
             attrs["colour"] = _colour(coord.current)
         elif key == "timeline":
             # Full timeline: {ts: {ts, rate, bin}} for the dashboard card.
+            # ``rate`` is omitted when the source has no data so the JSON
+            # payload is uniform; the card renders "no data" bars via
+            # the ``bin`` label.
             attrs["timeline"] = {
-                str(ts): {
-                    "ts": ts,
-                    "rate": _safe_rate(intensity),
-                    "bin": _bin_label(intensity),
-                }
+                str(ts): _timeline_entry(intensity)
                 for ts, intensity in sorted(coord.timeline.items())
             }
             attrs["history_hours"] = coord._history_h
@@ -158,11 +158,12 @@ class MeteoSwissSensor(CoordinatorEntity[MeteoSwissCoordinator], SensorEntity):
 # --- Value helpers ----------------------------------------------------------------
 
 
-def _safe_rate(intensity: Optional[ColorIntensity]) -> Any:
-    if intensity is None:
-        return "unknown"
-    if intensity.is_no_data:
-        return "unknown"
+def _safe_rate(intensity: Optional[ColorIntensity]) -> Optional[float]:
+    if intensity is None or intensity.is_no_data:
+        # None is the only safe value for a numeric sensor when the
+        # upstream has no data; the string "unknown" raises ValueError
+        # inside the sensor platform for state_class=measurement sensors.
+        return None
     if intensity.is_warning:
         return 0.0
     return round(intensity.representative_mm_per_hour, 2)
@@ -201,14 +202,25 @@ def _colour(intensity: Optional[ColorIntensity]) -> str:
     }.get(intensity.mm_per_hour_lower, "#888888")
 
 
-def _next_rain_minutes(summary: dict) -> Any:
+def _next_rain_minutes(summary: dict) -> Optional[int]:
     n = summary.get("next_rain_in_minutes")
-    return n if n is not None else "unknown"
+    # ``None`` surfaces as ``unavailable`` for numeric sensors, which is
+    # legal; the string "unknown" is not.
+    return int(n) if n is not None else None
 
 
-def _max_rate(intensity: Optional[ColorIntensity]) -> float:
-    if intensity is None:
-        return 0.0
-    if intensity.is_no_data or intensity.is_warning:
+def _max_rate(intensity: Optional[ColorIntensity]) -> Optional[float]:
+    if intensity is None or intensity.is_no_data:
+        return None
+    if intensity.is_warning:
         return 0.0
     return round(intensity.representative_mm_per_hour, 2)
+
+
+def _timeline_entry(intensity: Optional[ColorIntensity]) -> dict[str, Any]:
+    """One timeline step. ``rate`` is null when the source has no data."""
+    return {
+        "ts": intensity.ts if intensity is not None and intensity.ts is not None else 0,
+        "rate": _safe_rate(intensity),
+        "bin": _bin_label(intensity),
+    }

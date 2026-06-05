@@ -238,7 +238,15 @@ def predict_at_point(location: Location, radar_json: dict) -> Optional[ColorInte
                     from .decoder import point_in_polygon
                     if point_in_polygon(point, polygon):
                         return intensity_for_color(color)
-    return None
+
+    # Fallback: the point is not inside any polygon. The radar mosaic only
+    # draws the *raining* areas; the entire country is implicitly "no rain"
+    # where no polygon is drawn. The web app reflects this by showing
+    # 0 mm/h / grey ("0–1 mm/h") for those points. Mirror that behaviour
+    # so the timeline reports "dry" instead of "no data" for clear-sky
+    # moments. We use the 0-1 mm/h bin (``9a7e95``) because that's the
+    # "no measurable rain" colour MeteoSwiss itself uses in the legend.
+    return intensity_for_color("9a7e95")
 
 
 # --- Forecast summary ------------------------------------------------------------

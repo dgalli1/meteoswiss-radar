@@ -27,14 +27,35 @@ _PRECIPITATION_INTENSITY_UNIT = "mm/h"
 
 # Map a 1-2 letter "type code" to a function that pulls the value from the
 # coordinator. Keeping them as plain callables avoids a giant if-ladder.
+# For the "now" sensors (current_rate, current_state) we prefer the live
+# ``coord.current``; if that's a no-data gap, we fall back to the last
+# known real reading so the dashboard never sits on "unknown" while the
+# radar mosaic is being rebuilt.
 _VALUE_GETTERS = {
-    "current_rate":     lambda c: _safe_rate(c.current),
-    "current_state":    lambda c: _bin_label(c.current),
+    "current_rate":     lambda c: _safe_rate(_best_now_intensity(c)),
+    "current_state":    lambda c: _bin_label(_best_now_intensity(c)),
     "next_rain":        lambda c: _next_rain_minutes(c.summary),
     "forecast_max_6h":  lambda c: _max_rate(c.summary.get("max_intensity_6h")),
     "forecast_max_24h": lambda c: _max_rate(c.summary.get("max_intensity_24h")),
     "timeline":         lambda c: len(c.timeline),
 }
+
+
+def _best_now_intensity(c) -> Optional[ColorIntensity]:
+    """Return the most useful intensity to show for "now".
+
+    Order of preference:
+      1. ``coord.current`` if it's a real (non-no-data, non-warning) reading.
+      2. ``coord.last_known`` (the most recent past real reading).
+      3. ``coord.current`` unchanged (lets the UI show the actual no-data
+         bin label, e.g. "no data" or "storm warning").
+    """
+    cur = c.current
+    if cur is not None and not cur.is_no_data and not cur.is_warning:
+        return cur
+    if c.last_known is not None:
+        return c.last_known
+    return cur
 
 _DESCRIPTIONS = {
     "current_rate":     SensorEntityDescription(
@@ -129,10 +150,26 @@ class MeteoSwissSensor(CoordinatorEntity[MeteoSwissCoordinator], SensorEntity):
         }
         key = self.entity_description.key
         if key == "current_rate":
-            attrs["bin_label"] = _bin_label(coord.current)
-            attrs["colour"] = _colour(coord.current)
+            shown = _best_now_intensity(coord)
+            attrs["bin_label"] = _bin_label(shown)
+            attrs["colour"] = _colour(shown)
+            attrs["is_stale"] = bool(
+                coord.current is not None
+                and (coord.current.is_no_data or coord.current.is_warning)
+                and coord.last_known is not None
+                and shown is coord.last_known
+            )
+            if attrs["is_stale"] and coord.last_known_ts is not None:
+                attrs["last_known_ts"] = coord.last_known_ts
         elif key == "current_state":
-            attrs["colour"] = _colour(coord.current)
+            shown = _best_now_intensity(coord)
+            attrs["colour"] = _colour(shown)
+            attrs["is_stale"] = bool(
+                coord.current is not None
+                and (coord.current.is_no_data or coord.current.is_warning)
+                and coord.last_known is not None
+                and shown is coord.last_known
+            )
         elif key == "timeline":
             # Full timeline: {ts: {ts, rate, bin}} for the dashboard card.
             # ``rate`` is null when the source has no data so the JSON

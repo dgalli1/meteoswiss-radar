@@ -85,6 +85,20 @@ class MeteoSwissCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.data.get("current") if self.data else None
 
     @property
+    def last_known(self) -> ColorIntensity | None:
+        """The most recent step with a real (non-no-data) reading.
+
+        When ``current`` is in a data gap, this still returns the previous
+        actual measurement, along with the timestamp it was taken at. UI
+        surfaces should use this when ``current`` is ``is_no_data``.
+        """
+        return self.data.get("last_known") if self.data else None
+
+    @property
+    def last_known_ts(self) -> int | None:
+        return self.data.get("last_known_ts") if self.data else None
+
+    @property
     def summary(self) -> dict[str, Any]:
         return self.data.get("summary", {}) if self.data else {}
 
@@ -123,6 +137,11 @@ class MeteoSwissCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if payload is None:
                             continue
                         results[pic.timestamp] = predict_at_point(self.location, payload)
+
+                # Always expose a reading at exactly ``now`` so the dashboard
+                # card's "now" marker sits on a real bar instead of a gap.
+                # Interpolate from the nearest past and future neighbour.
+                results[now] = _interpolate_at(results, now)
         except (MeteoSwissError, asyncio.TimeoutError) as exc:
             raise UpdateFailed(f"MeteoSwiss fetch failed: {exc}") from exc
 
@@ -133,11 +152,33 @@ class MeteoSwissCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if first_future == now and now in results:
             current = results[now]
 
+        # Last known good reading. The radar frequently has gaps when the
+        # mosaic is being rebuilt; in that case ``current`` is the no-data
+        # sentinel, but we'd rather show "last reading 25 min ago" than a
+        # blank state. Walk back up to 6 h of history.
+        last_known = None
+        last_known_ts = None
+        for ts in sorted(results.keys(), reverse=True):
+            ci = results[ts]
+            if ci is None or ci.is_no_data or ci.is_warning:
+                continue
+            last_known = ci
+            last_known_ts = ts
+            break
+        # If we still have nothing, fall back to the most recent past step
+        # (even if it's a no-data marker) so callers can distinguish
+        # "no data" from "no data ever fetched".
+        if last_known is None and past_keys:
+            last_known_ts = past_keys[-1]
+            last_known = results[last_known_ts]
+
         summary = summarize_forecast(sorted(results.items()), now=now)
         return {
             "now": now,
             "timeline": results,
             "current": current,
+            "last_known": last_known,
+            "last_known_ts": last_known_ts,
             "summary": summary,
         }
 
@@ -151,3 +192,31 @@ class MeteoSwissCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except MeteoSwissClient.MeteoSwissError as exc:
             _LOGGER.warning("Step fetch failed %s: %s", pic.url, exc)
             return None
+
+
+def _interpolate_at(
+    results: dict[int, ColorIntensity | None], now: int
+) -> ColorIntensity | None:
+    """Pick the intensity at exactly ``now``.
+
+    If we already have a real measurement at ``now`` we use it; otherwise we
+    snap to the most recent past reading. The dashboard's "now" marker
+    should always sit on (or directly after) a real bar, never in a gap.
+    """
+    if now in results and results[now] is not None and not results[now].is_no_data:
+        return results[now]
+    # Walk back up to 3 hours of past readings looking for the latest real
+    # measurement. ``results`` is dense-ish in the past (5-min spacing) so
+    # this loop is short.
+    horizon = now - 3 * 3600
+    best = None
+    for ts in sorted(results.keys(), reverse=True):
+        if ts > now:
+            continue
+        if ts < horizon:
+            break
+        ci = results[ts]
+        if ci is not None and not ci.is_no_data and not ci.is_warning:
+            best = ci
+            break
+    return best

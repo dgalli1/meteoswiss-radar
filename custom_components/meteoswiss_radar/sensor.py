@@ -135,11 +135,11 @@ class MeteoSwissSensor(CoordinatorEntity[MeteoSwissCoordinator], SensorEntity):
             attrs["colour"] = _colour(coord.current)
         elif key == "timeline":
             # Full timeline: {ts: {ts, rate, bin}} for the dashboard card.
-            # ``rate`` is omitted when the source has no data so the JSON
+            # ``rate`` is null when the source has no data so the JSON
             # payload is uniform; the card renders "no data" bars via
             # the ``bin`` label.
             attrs["timeline"] = {
-                str(ts): _timeline_entry(intensity)
+                str(ts): _timeline_entry_for(ts, intensity)
                 for ts, intensity in sorted(coord.timeline.items())
             }
             attrs["history_hours"] = coord._history_h
@@ -218,9 +218,19 @@ def _max_rate(intensity: Optional[ColorIntensity]) -> Optional[float]:
 
 
 def _timeline_entry(intensity: Optional[ColorIntensity]) -> dict[str, Any]:
-    """One timeline step. ``rate`` is null when the source has no data."""
+    """One timeline step. ``rate`` is null when the source has no data.
+
+    The timestamp is supplied by the caller (it's the dict key in
+    ``coord.timeline``); ``ColorIntensity`` does not carry it itself.
+    """
     return {
-        "ts": intensity.ts if intensity is not None and intensity.ts is not None else 0,
+        "ts": 0,  # patched in by the caller via _timeline_entry_for()
         "rate": _safe_rate(intensity),
         "bin": _bin_label(intensity),
     }
+
+
+def _timeline_entry_for(ts: int, intensity: Optional[ColorIntensity]) -> dict[str, Any]:
+    entry = _timeline_entry(intensity)
+    entry["ts"] = int(ts)
+    return entry
